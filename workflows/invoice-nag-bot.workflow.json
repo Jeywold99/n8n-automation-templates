@@ -1,0 +1,315 @@
+{
+  "name": "Invoice Nag Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Invoice Nag Bot\n\nEvery day at 9:00 AM this workflow:\n1. Reads invoices from a Google Sheet\n2. Keeps only rows that are NOT paid AND past their due date\n3. Sends each client a warm, professional reminder by Gmail\n4. Bumps `reminders_sent` and stamps `last_reminded` = today in the sheet\n\nPaid invoices are never contacted.\n\nBefore first run: configure credentials + the 3 env vars (see README), and set this workflow as its own Error Workflow so failure alerts fire.",
+        "height": 300,
+        "width": 380,
+        "color": 4
+      },
+      "id": "note-overview",
+      "name": "Note - Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [140, -40]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "node-schedule",
+      "name": "Schedule Trigger 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 320]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.INVOICE_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Invoices",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "node-read",
+      "name": "Read Invoices",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [460, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 1: Data source\n\nDemo = Google Sheets.\n\nReplace this node with your invoicing tool (QuickBooks / Xero / Wave). Map their fields to:\n`client_name, email, invoice_no, amount, due_date, status, reminders_sent, last_reminded`.\n\nEverything downstream just needs those keys on each item.",
+        "height": 260,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-source",
+      "name": "Note - Swap Data Source",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, 560]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-not-paid",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "paid",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            },
+            {
+              "id": "cond-overdue",
+              "leftValue": "={{ $json.due_date }}",
+              "rightValue": "={{ $today }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "before"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-filter",
+      "name": "Filter Overdue Unpaid",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [680, 320]
+    },
+    {
+      "parameters": {
+        "content": "### Stop condition\n\nKeeps a row ONLY when both are true:\n- `status` is not \"paid\" (case-insensitive)\n- `due_date` is before today\n\nPaid or not-yet-due rows are dropped here, so they are never emailed.",
+        "height": 220,
+        "width": 300,
+        "color": 3
+      },
+      "id": "note-filter",
+      "name": "Note - Stop Condition",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [660, 40]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=Friendly reminder: Invoice {{ $json.invoice_no }}",
+        "emailType": "text",
+        "message": "=Hi {{ $json.client_name }},\n\nI hope you are doing well. This is a friendly reminder that invoice {{ $json.invoice_no }} for {{ $json.amount }} was due on {{ $json.due_date }}. If your payment is already on its way, thank you, and please feel free to ignore this note.\n\nWhenever it is convenient, you can go ahead and settle the balance. If you have any questions about the invoice or need anything from us, just reply to this email and we will be glad to help.\n\nThank you for working with us. We appreciate you.\n\nWarm regards,\n{{ $env.FROM_NAME }}",
+        "options": {}
+      },
+      "id": "node-gmail",
+      "name": "Send Reminder Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [900, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 2: Email provider\n\nDemo = Gmail.\n\nSwap this node for your provider (Outlook / SMTP / SendGrid / Mailgun). Keep the same warm, no-em-dash copy. Point `sendTo` at `{{ $json.email }}`.\n\nCopy is intentionally friendly, not aggressive.",
+        "height": 240,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-email",
+      "name": "Note - Swap Email",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [880, 560]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.INVOICE_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Invoices",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["invoice_no"],
+          "value": {
+            "invoice_no": "={{ $('Filter Overdue Unpaid').item.json.invoice_no }}",
+            "reminders_sent": "={{ (Number($('Filter Overdue Unpaid').item.json.reminders_sent) || 0) + 1 }}",
+            "last_reminded": "={{ $now.format('yyyy-MM-dd') }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-update",
+      "name": "Mark Reminder Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1120, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Update the sheet\n\nMatches the row by `invoice_no` and writes:\n- `reminders_sent` + 1\n- `last_reminded` = today (yyyy-MM-dd)\n\nContinue On Fail is on, so one bad row does not stop the batch.\n\nSame SWAP POINT as the data source: if you move off Sheets, this write must go back to your invoicing tool.",
+        "height": 240,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-update",
+      "name": "Note - Update Sheet",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1100, 560]
+    },
+    {
+      "parameters": {},
+      "id": "node-errortrigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [460, 880]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=⚠️ Invoice Nag Bot run failed.\n\nWorkflow: {{ $json.workflow.name }}\nNode: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error.message }}\nTime: {{ $now.format('yyyy-MM-dd HH:mm') }}",
+        "additionalFields": {}
+      },
+      "id": "node-telegram",
+      "name": "Telegram Failure Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [680, 880],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Failure alert\n\nIf the whole run errors out, the Error Trigger fires and sends a Telegram alert.\n\nIMPORTANT: this only works if you set this workflow as its own Error Workflow (Settings > Error Workflow > Invoice Nag Bot).",
+        "height": 220,
+        "width": 300,
+        "color": 2
+      },
+      "id": "note-error",
+      "name": "Note - Failure Alert",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [440, 1120]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger 9AM": {
+      "main": [
+        [
+          {
+            "node": "Read Invoices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Invoices": {
+      "main": [
+        [
+          {
+            "node": "Filter Overdue Unpaid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Overdue Unpaid": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reminder Email": {
+      "main": [
+        [
+          {
+            "node": "Mark Reminder Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Telegram Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {},
+  "tags": []
+}

@@ -1,0 +1,284 @@
+{
+  "name": "The Pocket Briefing",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## The Pocket Briefing\n\nEvery 15 minutes this workflow checks your Google Calendar for meetings starting in 30 to 45 minutes. For each one it:\n1. Extracts the guest (first attendee who is not you)\n2. Looks them up in your CRM sheet (who they are, company, how they found you, notes)\n3. Pulls the last 5 emails with them from Gmail\n4. Sends one Telegram brief to your phone\n\nEvery call opens sharp. Zero prep time.\n\nThe 15-minute poll + 30-45 minute window means each meeting gets exactly ONE brief, about half an hour before it starts.\n\nBefore first run: credentials + env vars (see README) and set this workflow as its own Error Workflow.",
+        "height": 360,
+        "width": 420,
+        "color": 4
+      },
+      "id": "note-overview",
+      "name": "Note - Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [60, -120]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "node-schedule",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 340]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $env.BRIEFING_CALENDAR }}",
+          "mode": "id"
+        },
+        "returnAll": false,
+        "limit": 10,
+        "options": {
+          "timeMin": "={{ $now.plus({ minutes: 30 }).toISO() }}",
+          "timeMax": "={{ $now.plus({ minutes: 45 }).toISO() }}",
+          "singleEvents": true
+        }
+      },
+      "id": "node-calendar",
+      "name": "Get Upcoming Meetings",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [420, 340],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 1: Calendar\n\nDemo = Google Calendar (calendar id from env, \"primary\" = your main calendar).\n\nSwap for Outlook Calendar (Microsoft Outlook node, Get Many events with the same 30-45 min window) or Calendly (webhook at booking time instead of polling).\n\nNo meetings in the window = flow ends quietly. No spam.",
+        "height": 260,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-calendar",
+      "name": "Note - Swap Calendar",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [380, 580]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per meeting that has an external guest.\n// The guest = first attendee that is not you (not marked self/organizer).\nconst out = [];\nfor (const item of $input.all()) {\n  const ev = item.json;\n  if (!ev || !ev.start) continue;\n  const attendees = ev.attendees || [];\n  const guest = attendees.find(a => a && a.email && !a.self && !a.organizer);\n  if (!guest) continue; // solo events, focus blocks etc. get no brief\n  out.push({\n    json: {\n      event_title: ev.summary || 'Meeting',\n      event_time: (ev.start.dateTime || ev.start.date || ''),\n      guest_email: guest.email,\n      guest_name: guest.displayName || guest.email.split('@')[0],\n    },\n  });\n}\nreturn out;"
+      },
+      "id": "node-extract",
+      "name": "Extract Guest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 340]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.CRM_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "email",
+              "lookupValue": "={{ $json.guest_email }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-crm",
+      "name": "Lookup Lead in CRM",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [860, 340],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 2: CRM\n\nDemo = Google Sheets \"Leads\" tab (name, email, company, source, notes), matched by the guest's email.\n\nSwap for HubSpot (Search Contact by email) or Pipedrive (Search Persons). Map to the same 5 fields.\n\nUnknown guest? The brief still sends, marked as not in the CRM.",
+        "height": 240,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-crm",
+      "name": "Note - Swap CRM",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [820, 40]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 5,
+        "simple": true,
+        "filters": {
+          "q": "={{ 'from:' + $('Extract Guest').first().json.guest_email + ' OR to:' + $('Extract Guest').first().json.guest_email }}"
+        }
+      },
+      "id": "node-gmail",
+      "name": "Fetch Email History",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1080, 340],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 3: Email history\n\nDemo = Gmail search, last 5 messages to or from the guest.\n\nSwap for Microsoft Outlook (Get Many messages with a search filter) or your CRM's email timeline. No history = the brief says so instead of breaking.",
+        "height": 200,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-email",
+      "name": "Note - Swap Email History",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1040, 620]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Assemble the one-message brief from the three lookups.\nconst guest = $('Extract Guest').first().json;\n\nlet lead = {};\ntry {\n  const row = $('Lookup Lead in CRM').first();\n  if (row && row.json && row.json.email) lead = row.json;\n} catch (e) { /* no CRM row found */ }\n\nconst emails = $input.all()\n  .map(i => i.json)\n  .filter(m => m && (m.subject || m.Subject || m.snippet));\n\nlet history = 'No past emails found.';\nif (emails.length) {\n  history = emails.slice(0, 5).map(m => {\n    const subject = m.subject || m.Subject || '(no subject)';\n    const snippet = m.snippet ? ' - ' + String(m.snippet).slice(0, 120) : '';\n    return '• ' + subject + snippet;\n  }).join('\\n');\n}\n\nconst lines = [\n  '📋 Briefing: ' + guest.event_title,\n  '🕐 When: ' + guest.event_time,\n  '',\n  '👤 Who: ' + (lead.name || guest.guest_name) + ' (' + guest.guest_email + ')',\n  lead.company ? '🏢 Company: ' + lead.company : '🏢 Company: not in CRM',\n  lead.source ? '🔎 How they found you: ' + lead.source : '',\n  lead.notes ? '📝 Notes: ' + lead.notes : '',\n  '',\n  '✉️ Recent emails:',\n  history,\n].filter(l => l !== '');\n\nreturn [{ json: { text: lines.join('\\n') } }];"
+      },
+      "id": "node-brief",
+      "name": "Build Brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 340]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "id": "node-telegram",
+      "name": "Send Briefing",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1520, 340],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 4: Where the brief lands\n\nDemo = Telegram (lands on the rep's phone).\n\nSwap for Slack DM (Slack node, send to user), SMS via Twilio, or email. The finished brief text is in {{ $json.text }}.",
+        "height": 200,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-out",
+      "name": "Note - Swap Output",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1480, 40]
+    },
+    {
+      "parameters": {},
+      "id": "node-errortrigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [420, 900]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=⚠️ Pocket Briefing run failed. You may walk into the next call blind, check n8n.\n\nWorkflow: {{ $json.workflow.name }}\nNode: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error.message }}\nTime: {{ $now.format('yyyy-MM-dd HH:mm') }}",
+        "additionalFields": {}
+      },
+      "id": "node-erroralert",
+      "name": "Telegram Failure Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [640, 900],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Failure alert\n\nSet this workflow as its own Error Workflow (Settings > Error Workflow > The Pocket Briefing) or this never fires.",
+        "height": 160,
+        "width": 300,
+        "color": 2
+      },
+      "id": "note-error",
+      "name": "Note - Failure Alert",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [400, 1120]
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [[{ "node": "Get Upcoming Meetings", "type": "main", "index": 0 }]]
+    },
+    "Get Upcoming Meetings": {
+      "main": [[{ "node": "Extract Guest", "type": "main", "index": 0 }]]
+    },
+    "Extract Guest": {
+      "main": [[{ "node": "Lookup Lead in CRM", "type": "main", "index": 0 }]]
+    },
+    "Lookup Lead in CRM": {
+      "main": [[{ "node": "Fetch Email History", "type": "main", "index": 0 }]]
+    },
+    "Fetch Email History": {
+      "main": [[{ "node": "Build Brief", "type": "main", "index": 0 }]]
+    },
+    "Build Brief": {
+      "main": [[{ "node": "Send Briefing", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Telegram Failure Alert", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {},
+  "tags": []
+}

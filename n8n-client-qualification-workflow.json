@@ -1,0 +1,994 @@
+{
+  "name": "Client Qualification — Zero Spillage (GSD HQ)",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-40, -80],
+      "parameters": {
+        "width": 480,
+        "height": 340,
+        "content": "## Setup checklist\n1. Replace YOUR_SPREADSHEET_ID in all 6 Google Sheets nodes (or reselect via From List). Sheet tab named 'Leads' with header row:\nlead_id, timestamp, full_name, company, email, phone, website, business_type, team_size, monthly_revenue, challenge, goal, raw_answers, status, score, score_reason, summary, draft_reply, final_reply, sent_at, last_error\n2. Replace REVIEWER_EMAIL@getshtdonehq.com (2 approval nodes) and YOUR_ALERT_EMAIL@getshtdonehq.com (2 alert nodes)\n3. In 'AI System Prompt' node: replace BOOKING_LINK and confirm the offer description matches what GSD HQ sells\n4. Attach credentials: Google Sheets OAuth2, Gmail OAuth2, Anthropic API\n5. Self-hosted: set WEBHOOK_URL env var so approval-form links in emails resolve\n6. In prequalification.html set WEBHOOK_URL to this workflow's production URL (…/webhook/client-qualification)"
+      }
+    },
+    {
+      "id": "node-webhook",
+      "name": "Client Application Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "b2d9f4a7-3c1e-4f8a-9d6b-0a5e2c7f1b84",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "client-qualification",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-normalize",
+      "name": "Normalize Lead",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [200, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "lead_id",
+              "type": "string",
+              "value": "={{ $execution.id }}"
+            },
+            {
+              "id": "a2",
+              "name": "timestamp",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "a3",
+              "name": "full_name",
+              "type": "string",
+              "value": "={{ ($json.body.fullName || 'Unknown').trim() }}"
+            },
+            {
+              "id": "a4",
+              "name": "first_name",
+              "type": "string",
+              "value": "={{ (($json.body.fullName || '').trim().split(' ')[0]) || 'there' }}"
+            },
+            {
+              "id": "a5",
+              "name": "company",
+              "type": "string",
+              "value": "={{ $json.body.company || '' }}"
+            },
+            {
+              "id": "a6",
+              "name": "email",
+              "type": "string",
+              "value": "={{ ($json.body.email || '').trim() }}"
+            },
+            {
+              "id": "a7",
+              "name": "phone",
+              "type": "string",
+              "value": "={{ $json.body.phone || '' }}"
+            },
+            {
+              "id": "a8",
+              "name": "website",
+              "type": "string",
+              "value": "={{ $json.body.website || '' }}"
+            },
+            {
+              "id": "a9",
+              "name": "business_type",
+              "type": "string",
+              "value": "={{ $json.body.businessType || '' }}"
+            },
+            {
+              "id": "a10",
+              "name": "team_size",
+              "type": "string",
+              "value": "={{ $json.body.employees || '' }}"
+            },
+            {
+              "id": "a11",
+              "name": "monthly_revenue",
+              "type": "string",
+              "value": "={{ $json.body.revenue || '' }}"
+            },
+            {
+              "id": "a12",
+              "name": "challenge",
+              "type": "string",
+              "value": "={{ $json.body.challenge || '' }}"
+            },
+            {
+              "id": "a13",
+              "name": "goal",
+              "type": "string",
+              "value": "={{ $json.body.goal || '' }}"
+            },
+            {
+              "id": "a14",
+              "name": "raw_answers",
+              "type": "string",
+              "value": "={{ JSON.stringify($json.body, null, 2) }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-log-new",
+      "name": "Sheets: Log New Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [400, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $json.lead_id }}",
+            "timestamp": "={{ $json.timestamp }}",
+            "full_name": "={{ $json.full_name }}",
+            "company": "={{ $json.company }}",
+            "email": "={{ $json.email }}",
+            "phone": "={{ $json.phone }}",
+            "website": "={{ $json.website }}",
+            "business_type": "={{ $json.business_type }}",
+            "team_size": "={{ $json.team_size }}",
+            "monthly_revenue": "={{ $json.monthly_revenue }}",
+            "challenge": "={{ $json.challenge }}",
+            "goal": "={{ $json.goal }}",
+            "raw_answers": "={{ $json.raw_answers }}",
+            "status": "new"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-sysprompt",
+      "name": "AI System Prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [600, 300],
+      "parameters": {
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sp1",
+              "name": "system_prompt",
+              "type": "string",
+              "value": "You are the lead-response assistant for Get Sh*t Done HQ (GSD HQ), a done-for-you marketing and automation agency. Business owners - coaches, consultants, agencies, e-commerce, SaaS, and local businesses - apply through a prequalification form to work with us. Your job is to qualify each applicant for fit and draft a reply that converts a good-fit applicant into a booked strategy call.\n\nFor every application you must do three things:\n\n1. SUMMARIZE the applicant in 2-3 sentences: who they are and what their business is, the specific challenge they named, and what success looks like to them. Use only facts present in the application - never invent details. If a field is empty, say so explicitly rather than guessing.\n\n2. SCORE the applicant's fit as exactly one of: hot, warm, cold. Weigh three signals: revenue (ability to invest), clarity and severity of the stated challenge (do we solve it), and readiness (specific goal, urgency).\n- hot: monthly revenue $25k+ OR a clearly painful, specific challenge we solve, PLUS a concrete goal - a business with money on the line and a real problem. These get called first.\n- warm: a legitimate business with a clear challenge but a limiting signal - lower revenue (under $10k), a vaguer goal, or no urgency. Worth pursuing.\n- cold: under $5k revenue with a vague challenge, one-line or spam-like answers, or a business clearly outside what we do (e.g. wants something we don't offer). Low priority.\nGive a one-line score_reason that cites the specific signals you used (name the revenue band, the challenge, the goal).\n\n3. DRAFT a reply in the GSD HQ voice that moves a good applicant toward booking a call:\n- Bold, direct, high-energy, plain-spoken. No corporate fluff, no hype-words like 'unlock' or 'game-changer', no emojis, no exclamation-mark spam (one max).\n- Short punchy sentences. Address them by first name.\n- In the first two sentences, name their specific challenge or goal back to them so it is obviously a real human reply, not a template.\n- Briefly connect what they said to how GSD HQ moves that needle - concrete, not salesy. One or two sentences.\n- 90-150 words.\n- End with exactly one clear next step: book a strategy call at BOOKING_LINK.\n- Sign off as 'The GSD HQ Team'.\n- For a cold-scored applicant, still be respectful and human, but keep it shorter and softer on the call push - invite them to reply with more detail instead of hard-pitching the call.\n- Never promise specific results, revenue numbers, timelines, or prices. Never reveal that the reply was AI-drafted or that the applicant was scored.\n\nOUTPUT FORMAT - respond with ONLY a single valid JSON object. No markdown fences, no commentary, nothing before or after the JSON:\n{\"summary\": \"...\", \"score\": \"hot|warm|cold\", \"score_reason\": \"...\", \"draft_reply\": \"...\"}\nUse \\n inside draft_reply for line breaks."
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-claude",
+      "name": "Claude: Analyze & Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, temperature: 0.5, system: $json.system_prompt, messages: [ { role: 'user', content: 'New client application from the GSD HQ prequalification form.\\n\\nName: ' + $('Normalize Lead').first().json.full_name + '\\nCompany: ' + ($('Normalize Lead').first().json.company || 'not provided') + '\\nEmail: ' + $('Normalize Lead').first().json.email + '\\nWebsite: ' + ($('Normalize Lead').first().json.website || 'not provided') + '\\nBusiness type: ' + ($('Normalize Lead').first().json.business_type || 'not provided') + '\\nTeam size: ' + ($('Normalize Lead').first().json.team_size || 'not provided') + '\\nMonthly revenue: ' + ($('Normalize Lead').first().json.monthly_revenue || 'not provided') + '\\n\\nBiggest challenge:\\n' + ($('Normalize Lead').first().json.challenge || 'not provided') + '\\n\\nWhat success looks like:\\n' + ($('Normalize Lead').first().json.goal || 'not provided') } ] }) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "id": "ANTHROPIC_CRED_ID",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "id": "node-parse",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst raw = (resp.content && resp.content[0] && resp.content[0].text) ? resp.content[0].text : '';\nif (!raw) {\n  throw new Error('Anthropic response contained no text content: ' + JSON.stringify(resp).slice(0, 300));\n}\nconst cleaned = raw.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim();\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  throw new Error('AI returned invalid JSON: ' + raw.slice(0, 300));\n}\nconst { summary, score, score_reason, draft_reply } = parsed;\nif (!summary || !score || !draft_reply) {\n  throw new Error('AI JSON missing required fields. Got keys: ' + Object.keys(parsed).join(', '));\n}\nconst normScore = String(score).toLowerCase();\nif (!['hot', 'warm', 'cold'].includes(normScore)) {\n  throw new Error('AI returned invalid score: ' + score);\n}\nreturn [{ json: { summary, score: normScore, score_reason: score_reason || '', draft_reply } }];"
+      }
+    },
+    {
+      "id": "node-save-draft",
+      "name": "Sheets: Save Draft",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1200, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "pending_approval",
+            "score": "={{ $json.score }}",
+            "score_reason": "={{ $json.score_reason }}",
+            "summary": "={{ $json.summary }}",
+            "draft_reply": "={{ $json.draft_reply }}"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-ask-reviewer",
+      "name": "Gmail: Ask Reviewer (4h)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1400, 300],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "sendAndWait",
+        "sendTo": "REVIEWER_EMAIL@getshtdonehq.com",
+        "subject": "=[{{ $('Parse AI Output').first().json.score.toUpperCase() }}] New application: {{ $('Normalize Lead').first().json.full_name }}{{ $('Normalize Lead').first().json.company ? ' — ' + $('Normalize Lead').first().json.company : '' }}",
+        "message": "=New client application needs a reply.\n\nName: {{ $('Normalize Lead').first().json.full_name }}\nCompany: {{ $('Normalize Lead').first().json.company || '—' }}\nEmail: {{ $('Normalize Lead').first().json.email }}\nPhone: {{ $('Normalize Lead').first().json.phone || '—' }}\nBusiness / team / revenue: {{ $('Normalize Lead').first().json.business_type || '—' }} / {{ $('Normalize Lead').first().json.team_size || '—' }} / {{ $('Normalize Lead').first().json.monthly_revenue || '—' }}\n\nFit score: {{ $('Parse AI Output').first().json.score.toUpperCase() }} — {{ $('Parse AI Output').first().json.score_reason }}\n\nSummary:\n{{ $('Parse AI Output').first().json.summary }}\n\n===== DRAFT REPLY =====\n{{ $('Parse AI Output').first().json.draft_reply }}\n=======================\n\nClick below and choose:\n- approve: send the draft as-is\n- edit: paste your full edited version into edited_reply\n- reject: no reply is sent to this applicant\n\nNo response in 4 hours = one reminder. 8 hours after that, the applicant automatically gets a short holding reply so no lead goes cold.",
+        "responseType": "customForm",
+        "defineForm": "fields",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "approve" },
+                  { "option": "edit" },
+                  { "option": "reject" }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "edited_reply",
+              "fieldType": "textarea"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false,
+          "limitWaitTime": {
+            "values": {
+              "limitType": "afterTimeInterval",
+              "resumeAmount": 4,
+              "resumeUnit": "hours"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "GSD HQ Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-responded-1",
+      "name": "Reviewer Responded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1600, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "r1",
+              "leftValue": "={{ $json.data?.decision ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-decision",
+      "name": "Decision",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1820, 200],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "renameOutput": true,
+              "outputKey": "approve",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "d1",
+                    "leftValue": "={{ $json.data.decision }}",
+                    "rightValue": "approve",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "renameOutput": true,
+              "outputKey": "edit",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "d2",
+                    "leftValue": "={{ $json.data.decision }}",
+                    "rightValue": "edit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "renameOutput": true,
+              "outputKey": "reject",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "d3",
+                    "leftValue": "={{ $json.data.decision }}",
+                    "rightValue": "reject",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-final-reply",
+      "name": "Set Final Reply",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2040, 140],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f1",
+              "name": "final_reply",
+              "type": "string",
+              "value": "={{ ($json.data?.decision === 'edit' && $json.data?.edited_reply) ? $json.data.edited_reply : $('Parse AI Output').first().json.draft_reply }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-send-reply",
+      "name": "Gmail: Send Reply to Lead",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2260, 140],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Normalize Lead').first().json.email }}",
+        "subject": "=Your application to Get Sh*t Done HQ",
+        "emailType": "text",
+        "message": "={{ $('Set Final Reply').first().json.final_reply }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "GSD HQ Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-mark-sent",
+      "name": "Sheets: Mark Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2480, 140],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "sent",
+            "final_reply": "={{ $('Set Final Reply').first().json.final_reply }}",
+            "sent_at": "={{ $now.toISO() }}"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-mark-rejected",
+      "name": "Sheets: Mark Rejected",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2040, 360],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "rejected"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-ask-again",
+      "name": "Gmail: Ask Reviewer Again (8h)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1820, 520],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "sendAndWait",
+        "sendTo": "REVIEWER_EMAIL@getshtdonehq.com",
+        "subject": "=REMINDER — application waiting: {{ $('Normalize Lead').first().json.full_name }} ([{{ $('Parse AI Output').first().json.score.toUpperCase() }}])",
+        "message": "=An application has been waiting for approval since {{ $('Normalize Lead').first().json.timestamp }}.\n\nName: {{ $('Normalize Lead').first().json.full_name }}\nCompany: {{ $('Normalize Lead').first().json.company || '—' }}\nEmail: {{ $('Normalize Lead').first().json.email }}\nFit score: {{ $('Parse AI Output').first().json.score.toUpperCase() }} — {{ $('Parse AI Output').first().json.score_reason }}\n\nSummary:\n{{ $('Parse AI Output').first().json.summary }}\n\n===== DRAFT REPLY =====\n{{ $('Parse AI Output').first().json.draft_reply }}\n=======================\n\nNo response within 8 hours and the applicant automatically gets a short holding reply so they are not left hanging.",
+        "responseType": "customForm",
+        "defineForm": "fields",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "approve" },
+                  { "option": "edit" },
+                  { "option": "reject" }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "edited_reply",
+              "fieldType": "textarea"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false,
+          "limitWaitTime": {
+            "values": {
+              "limitType": "afterTimeInterval",
+              "resumeAmount": 8,
+              "resumeUnit": "hours"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "GSD HQ Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-responded-2",
+      "name": "Reviewer Responded (2nd)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2040, 520],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "r2",
+              "leftValue": "={{ $json.data?.decision ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-holding",
+      "name": "Gmail: Send Holding Reply",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2260, 600],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Normalize Lead').first().json.email }}",
+        "subject": "=We got your application — Get Sh*t Done HQ",
+        "emailType": "text",
+        "message": "=Hi {{ $('Normalize Lead').first().json.first_name }},\n\nThanks for applying to work with Get Sh*t Done HQ. Your application came through and it's in front of our team right now. You'll get a personal reply within 24 hours.\n\nTalk soon,\nThe GSD HQ Team",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "GSD HQ Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-mark-held",
+      "name": "Sheets: Mark Held",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2480, 600],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "held_autoreply",
+            "final_reply": "AUTO HOLDING REPLY (reviewer did not respond in time)",
+            "sent_at": "={{ $now.toISO() }}"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-escalate",
+      "name": "Gmail: Escalate to Me",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2700, 600],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "YOUR_ALERT_EMAIL@getshtdonehq.com",
+        "subject": "=ESCALATION: application auto-held — {{ $('Normalize Lead').first().json.full_name }} ([{{ $('Parse AI Output').first().json.score.toUpperCase() }}])",
+        "emailType": "text",
+        "message": "=The reviewer did not respond to the approval request within 12 hours total.\n\nA holding reply was automatically sent to the applicant so they are not left hanging, but someone still needs to follow up personally.\n\nApplicant: {{ $('Normalize Lead').first().json.full_name }} ({{ $('Normalize Lead').first().json.email }})\nCompany: {{ $('Normalize Lead').first().json.company || '—' }}\nLead ID: {{ $('Normalize Lead').first().json.lead_id }}\nFit score: {{ $('Parse AI Output').first().json.score.toUpperCase() }}\nSubmitted: {{ $('Normalize Lead').first().json.timestamp }}\n\nSheet status is now: held_autoreply",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "GSD HQ Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-mark-error",
+      "name": "Sheets: Mark Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1400, 820],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "error",
+            "last_error": "={{ ($json.error?.message ?? JSON.stringify($json)).slice(0, 300) }}"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-alert-me",
+      "name": "Gmail: Alert Me (Failure)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1400, 980],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "YOUR_ALERT_EMAIL@getshtdonehq.com",
+        "subject": "=PIPELINE FAILURE — lead {{ $('Normalize Lead').first().json.lead_id }} ({{ $('Normalize Lead').first().json.full_name }})",
+        "emailType": "text",
+        "message": "=A node failed in the client-qualification workflow. The applicant is logged in the sheet but has NOT received a reply.\n\nApplicant: {{ $('Normalize Lead').first().json.full_name }} ({{ $('Normalize Lead').first().json.email }})\nCompany: {{ $('Normalize Lead').first().json.company || '—' }}\nLead ID: {{ $('Normalize Lead').first().json.lead_id }}\nSubmitted: {{ $('Normalize Lead').first().json.timestamp }}\n\nError:\n{{ ($json.error?.message ?? JSON.stringify($json)).slice(0, 500) }}\n\nOpen the n8n execution log to retry or handle manually.",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "GSD HQ Gmail"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Client Application Webhook": {
+      "main": [
+        [
+          { "node": "Normalize Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Normalize Lead": {
+      "main": [
+        [
+          { "node": "Sheets: Log New Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheets: Log New Lead": {
+      "main": [
+        [
+          { "node": "AI System Prompt", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "AI System Prompt": {
+      "main": [
+        [
+          { "node": "Claude: Analyze & Draft", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude: Analyze & Draft": {
+      "main": [
+        [
+          { "node": "Parse AI Output", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          { "node": "Sheets: Save Draft", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheets: Save Draft": {
+      "main": [
+        [
+          { "node": "Gmail: Ask Reviewer (4h)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gmail: Ask Reviewer (4h)": {
+      "main": [
+        [
+          { "node": "Reviewer Responded?", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Reviewer Responded?": {
+      "main": [
+        [
+          { "node": "Decision", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Gmail: Ask Reviewer Again (8h)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Decision": {
+      "main": [
+        [
+          { "node": "Set Final Reply", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Set Final Reply", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Rejected", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Set Final Reply": {
+      "main": [
+        [
+          { "node": "Gmail: Send Reply to Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gmail: Send Reply to Lead": {
+      "main": [
+        [
+          { "node": "Sheets: Mark Sent", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gmail: Ask Reviewer Again (8h)": {
+      "main": [
+        [
+          { "node": "Reviewer Responded (2nd)?", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Reviewer Responded (2nd)?": {
+      "main": [
+        [
+          { "node": "Decision", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Gmail: Send Holding Reply", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gmail: Send Holding Reply": {
+      "main": [
+        [
+          { "node": "Sheets: Mark Held", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheets: Mark Held": {
+      "main": [
+        [
+          { "node": "Gmail: Escalate to Me", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}

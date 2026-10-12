@@ -1,0 +1,273 @@
+{
+  "name": "The Ghost Chaser",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## The Ghost Chaser\n\nEvery morning at 8:00 AM:\n1. Reads sent proposals from a Google Sheet\n2. Keeps rows where status is \"sent\" AND sent 3+ days ago AND not followed up in the last 3 days\n3. Creates a ready-to-send follow-up DRAFT in your Gmail drafts folder (you review, hit send)\n4. Stamps last_followup = today so it does not draft again tomorrow\n\nReplied / won / lost rows are never chased.\n\nBefore first run: credentials + env vars (see README) and set this workflow as its own Error Workflow.",
+        "height": 300,
+        "width": 400,
+        "color": 4
+      },
+      "id": "note-overview",
+      "name": "Note - Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [100, -40]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "node-schedule",
+      "name": "Schedule Trigger 8AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 320]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.PROPOSALS_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Proposals",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "node-read",
+      "name": "Read Proposals",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [440, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 1: Pipeline source\n\nDemo = Google Sheets \"Proposals\" tab.\n\nSwap for your CRM: HubSpot (Get Deals, stage = proposal sent), Pipedrive (Get Deals, status open + proposal stage). Map fields to:\nclient_name, email, proposal_no, amount, sent_date, status, last_followup.",
+        "height": 240,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-crm",
+      "name": "Note - Swap CRM",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [400, 560]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-status-sent",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "sent",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "cond-3-days-old",
+              "leftValue": "={{ $json.sent_date }}",
+              "rightValue": "={{ $today.minus({ days: 3 }) }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "before"
+              }
+            },
+            {
+              "id": "cond-not-recently-chased",
+              "leftValue": "={{ !$json.last_followup || String($json.last_followup) < $today.minus({ days: 3 }).toISODate() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-filter",
+      "name": "Filter Ghosted Proposals",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [660, 320]
+    },
+    {
+      "parameters": {
+        "content": "### Stop conditions\n\nA row is chased ONLY when all three are true:\n- status is exactly \"sent\" (replied / won / lost are skipped)\n- sent_date is more than 3 days ago\n- last_followup is empty OR older than 3 days (no daily duplicate drafts)",
+        "height": 220,
+        "width": 300,
+        "color": 3
+      },
+      "id": "note-filter",
+      "name": "Note - Stop Conditions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [640, 40]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "=Quick check-in on our proposal, {{ $json.client_name.split(' ')[0] }}",
+        "emailType": "text",
+        "message": "=Hi {{ $json.client_name.split(' ')[0] }},\n\nI hope your week is going well. I wanted to circle back on proposal {{ $json.proposal_no }} for {{ $json.amount }} that I sent over on {{ $json.sent_date }}. I know inboxes get busy, so consider this a gentle nudge rather than a chase.\n\nIf you have questions, want to adjust the scope, or simply need more time, just say the word and I will make it easy. And if it is a no for now, that is completely fine too. A quick reply either way helps me plan.\n\nLooking forward to hearing from you.\n\nWarm regards,\n{{ $env.FROM_NAME }}",
+        "options": {
+          "sendTo": "={{ $json.email }}"
+        }
+      },
+      "id": "node-draft",
+      "name": "Create Gmail Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [880, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 2: Email\n\nDemo = Gmail DRAFT (human reviews and hits send, nothing goes out automatically).\n\nSwap for Outlook draft, or change resource to Message > Send if you want fully automatic follow-ups. Copy is warm and gives an easy out on purpose.",
+        "height": 220,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-email",
+      "name": "Note - Swap Email",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [860, 560]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.PROPOSALS_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Proposals",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["proposal_no"],
+          "value": {
+            "proposal_no": "={{ $('Filter Ghosted Proposals').item.json.proposal_no }}",
+            "last_followup": "={{ $now.format('yyyy-MM-dd') }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-update",
+      "name": "Stamp Last Followup",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1100, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "node-errortrigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [440, 880]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=⚠️ Ghost Chaser run failed.\n\nWorkflow: {{ $json.workflow.name }}\nNode: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error.message }}\nTime: {{ $now.format('yyyy-MM-dd HH:mm') }}",
+        "additionalFields": {}
+      },
+      "id": "node-telegram",
+      "name": "Telegram Failure Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [660, 880],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Failure alert\n\nTelegram ping if the whole run errors out.\n\nOnly works if you set this workflow as its own Error Workflow (Settings > Error Workflow > The Ghost Chaser).",
+        "height": 180,
+        "width": 300,
+        "color": 2
+      },
+      "id": "note-error",
+      "name": "Note - Failure Alert",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, 1100]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger 8AM": {
+      "main": [[{ "node": "Read Proposals", "type": "main", "index": 0 }]]
+    },
+    "Read Proposals": {
+      "main": [[{ "node": "Filter Ghosted Proposals", "type": "main", "index": 0 }]]
+    },
+    "Filter Ghosted Proposals": {
+      "main": [[{ "node": "Create Gmail Draft", "type": "main", "index": 0 }]]
+    },
+    "Create Gmail Draft": {
+      "main": [[{ "node": "Stamp Last Followup", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Telegram Failure Alert", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {},
+  "tags": []
+}

@@ -1,0 +1,409 @@
+{
+  "name": "Approve-and-Post",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Approve-and-Post\n\nTwo paths in one workflow:\n\nPATH A (top): new rough idea lands in Airtable -> Claude drafts the LinkedIn post -> Slack message with Approve / Decline buttons -> decision saved back to Airtable.\n\nPATH B (bottom): weekdays at 9:00 AM -> oldest approved post is published to LinkedIn -> marked as posted.\n\nThe founder never opens LinkedIn. Approving takes one tap.\n\nBefore first run: credentials + env vars (see README) and set this workflow as its own Error Workflow.",
+        "height": 320,
+        "width": 420,
+        "color": 4
+      },
+      "id": "note-overview",
+      "name": "Note - Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [60, -80]
+    },
+    {
+      "parameters": {
+        "baseId": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "tableId": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_TABLE_ID }}",
+          "mode": "id"
+        },
+        "triggerField": "Created",
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "additionalFields": {}
+      },
+      "id": "node-airtable-trigger",
+      "name": "New Idea in Airtable",
+      "type": "n8n-nodes-base.airtableTrigger",
+      "typeVersion": 1,
+      "position": [200, 320],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Airtable Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 1: Idea inbox\n\nDemo = Airtable table \"Ideas\" (fields: idea, status, draft, posted_at, Created).\n\nSwap for Notion, Google Sheets, a Telegram bot, or a voice-note-to-text webhook. Anything that produces { idea } items works.",
+        "height": 200,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-inbox",
+      "name": "Note - Swap Idea Inbox",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [140, 560]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 1024, messages: [{ role: 'user', content: 'Write a LinkedIn post based on this rough idea. Rules: strong hook in the first line, short punchy paragraphs, sound like a human founder not a brand, no em dashes, at most 3 hashtags at the very end, finish with a question or soft call to action. Return ONLY the post text, nothing else.\\n\\nRough idea: ' + (($json.fields && $json.fields.idea) || $json.idea || '') }] }) }}",
+        "options": {}
+      },
+      "id": "node-claude",
+      "name": "Draft Post with Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "anthropicApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 2: AI writer\n\nDemo = Anthropic Claude (claude-opus-4-8) via HTTP Request with the built-in Anthropic credential.\n\nSwap for the OpenAI node or any LLM. Edit the writing rules inside this node's JSON body. If the AI call fails, the raw idea is used as the draft so the flow never dies.",
+        "height": 220,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-ai",
+      "name": "Note - Swap AI Writer",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [380, 40]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull the original idea + record id from the trigger, and the drafted\n// post from Claude's response. If the AI call failed (Continue On Fail),\n// fall back to the raw idea so the approval flow still works.\nconst trigger = $('New Idea in Airtable').first().json;\nconst idea = (trigger.fields && trigger.fields.idea) || trigger.idea || '';\nconst recordId = trigger.id;\n\nconst resp = $input.first().json;\nlet draft = '';\nif (resp && Array.isArray(resp.content)) {\n  const textBlock = resp.content.find(b => b.type === 'text');\n  if (textBlock && textBlock.text) draft = textBlock.text.trim();\n}\nif (!draft) {\n  draft = idea + '\\n\\n(AI drafting failed, this is the raw idea. Edit before approving.)';\n}\n\nreturn [{ json: { idea, draft, record_id: recordId } }];"
+      },
+      "id": "node-extract",
+      "name": "Extract Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_APPROVALS_CHANNEL }}",
+          "mode": "name"
+        },
+        "message": "=📝 *New LinkedIn post ready for approval*\n\n*Your idea:* {{ $json.idea }}\n\n*Drafted post:*\n{{ $json.draft }}\n\nApprove to queue it for the next weekday 9 AM posting slot.",
+        "responseType": "approval",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-slack-approve",
+      "name": "Approve in Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [860, 320],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Slack Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 3: Approval channel\n\nDemo = Slack \"Send and Wait for Approval\" (one-tap Approve / Decline buttons; workflow pauses until tapped).\n\nSwap for Telegram (same Send and Wait operation exists on the Telegram node) or email approval. Approved -> status \"approved\". Declined -> status \"rejected\".",
+        "height": 220,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-approve",
+      "name": "Note - Swap Approval",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [820, 40]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_TABLE_ID }}",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["id"],
+          "value": {
+            "id": "={{ $('Extract Draft').item.json.record_id }}",
+            "status": "={{ $json.data.approved ? 'approved' : 'rejected' }}",
+            "draft": "={{ $('Extract Draft').item.json.draft }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-save-decision",
+      "name": "Save Decision to Airtable",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [1080, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Airtable Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "node-schedule",
+      "name": "Weekdays 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 760]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_TABLE_ID }}",
+          "mode": "id"
+        },
+        "filterByFormula": "status='approved'",
+        "returnAll": false,
+        "limit": 1,
+        "options": {}
+      },
+      "id": "node-get-approved",
+      "name": "Get Next Approved Post",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [420, 760],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Airtable Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### The posting queue\n\nEach weekday at 9 AM, PATH B grabs ONE approved post (oldest first) and publishes it. Approve five posts on Sunday and they roll out Monday to Friday automatically.\n\nNo approved posts = nothing happens, no errors.",
+        "height": 200,
+        "width": 300,
+        "color": 3
+      },
+      "id": "note-queue",
+      "name": "Note - Posting Queue",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [380, 980]
+    },
+    {
+      "parameters": {
+        "postAs": "person",
+        "person": "SELECT_AFTER_ADDING_CREDENTIAL",
+        "text": "={{ $json.fields.draft }}",
+        "additionalFields": {}
+      },
+      "id": "node-linkedin",
+      "name": "Publish to LinkedIn",
+      "type": "n8n-nodes-base.linkedIn",
+      "typeVersion": 1,
+      "position": [640, 760],
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "LinkedIn account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 4: Publishing target\n\nDemo = LinkedIn (post as person; open the node and pick your profile after adding the credential).\n\nSwap for X/Twitter, Facebook Pages, or a Buffer/Hypefury HTTP call.\n\nContinue On Fail is OFF here on purpose: if publishing fails we must NOT mark the post as posted; the failure alert fires instead.",
+        "height": 240,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-publish",
+      "name": "Note - Swap Publishing",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [700, 980]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_TABLE_ID }}",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["id"],
+          "value": {
+            "id": "={{ $('Get Next Approved Post').item.json.id }}",
+            "status": "posted",
+            "posted_at": "={{ $now.format('yyyy-MM-dd') }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-mark-posted",
+      "name": "Mark as Posted",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [860, 760],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Airtable Token"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "node-errortrigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 1240]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_APPROVALS_CHANNEL }}",
+          "mode": "name"
+        },
+        "text": "=⚠️ Approve-and-Post run FAILED. A post may not have gone out.\n\n*Workflow:* {{ $json.workflow.name }}\n*Node:* {{ $json.execution.lastNodeExecuted }}\n*Error:* {{ $json.execution.error.message }}\n*Time:* {{ $now.format('yyyy-MM-dd HH:mm') }}",
+        "otherOptions": {}
+      },
+      "id": "node-erroralert",
+      "name": "Slack Failure Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [420, 1240],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Slack Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Failure alert\n\nSet this workflow as its own Error Workflow (Settings > Error Workflow > Approve-and-Post) or this never fires.",
+        "height": 160,
+        "width": 300,
+        "color": 2
+      },
+      "id": "note-error",
+      "name": "Note - Failure Alert",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 1460]
+    }
+  ],
+  "connections": {
+    "New Idea in Airtable": {
+      "main": [[{ "node": "Draft Post with Claude", "type": "main", "index": 0 }]]
+    },
+    "Draft Post with Claude": {
+      "main": [[{ "node": "Extract Draft", "type": "main", "index": 0 }]]
+    },
+    "Extract Draft": {
+      "main": [[{ "node": "Approve in Slack", "type": "main", "index": 0 }]]
+    },
+    "Approve in Slack": {
+      "main": [[{ "node": "Save Decision to Airtable", "type": "main", "index": 0 }]]
+    },
+    "Weekdays 9AM": {
+      "main": [[{ "node": "Get Next Approved Post", "type": "main", "index": 0 }]]
+    },
+    "Get Next Approved Post": {
+      "main": [[{ "node": "Publish to LinkedIn", "type": "main", "index": 0 }]]
+    },
+    "Publish to LinkedIn": {
+      "main": [[{ "node": "Mark as Posted", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Slack Failure Alert", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {},
+  "tags": []
+}

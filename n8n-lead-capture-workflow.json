@@ -1,0 +1,932 @@
+{
+  "name": "Lead Capture — Zero Spillage",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-40, -60],
+      "parameters": {
+        "width": 460,
+        "height": 300,
+        "content": "## Setup checklist\n1. Replace YOUR_SPREADSHEET_ID in all 6 Google Sheets nodes (or reselect via From List). Sheet tab must be named 'Leads' with header row: lead_id, timestamp, name, email, raw_answers, status, score, score_reason, summary, draft_reply, final_reply, sent_at, last_error\n2. Replace COACH_EMAIL@example.com (2 Gmail approval nodes) and YOUR_ALERT_EMAIL@example.com (2 alert nodes)\n3. In 'AI System Prompt' node: replace COACH_NAME, COACH_FIRST_NAME, BOOKING_LINK, WHAT_THE_COACH_TEACHES\n4. Attach credentials: Google Sheets OAuth2, Gmail OAuth2, Anthropic API\n5. Self-hosted: set WEBHOOK_URL env var so approval-form links in emails are reachable\n6. Point your website form's POST at the production webhook URL"
+      }
+    },
+    {
+      "id": "node-webhook",
+      "name": "Lead Form Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "7f3c2a1e-9b4d-4e6f-8a2c-5d1e0f9b7a3c",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-lead",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-normalize",
+      "name": "Normalize Lead",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [200, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "lead_id",
+              "type": "string",
+              "value": "={{ $execution.id }}"
+            },
+            {
+              "id": "a2",
+              "name": "timestamp",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "a3",
+              "name": "name",
+              "type": "string",
+              "value": "={{ $json.body.name || $json.body.first_name || $json.body.full_name || 'Unknown' }}"
+            },
+            {
+              "id": "a4",
+              "name": "email",
+              "type": "string",
+              "value": "={{ $json.body.email || $json.body.Email || '' }}"
+            },
+            {
+              "id": "a5",
+              "name": "raw_answers",
+              "type": "string",
+              "value": "={{ JSON.stringify($json.body, null, 2) }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-log-new",
+      "name": "Sheets: Log New Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [400, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $json.lead_id }}",
+            "timestamp": "={{ $json.timestamp }}",
+            "name": "={{ $json.name }}",
+            "email": "={{ $json.email }}",
+            "raw_answers": "={{ $json.raw_answers }}",
+            "status": "new"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-sysprompt",
+      "name": "AI System Prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [600, 300],
+      "parameters": {
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sp1",
+              "name": "system_prompt",
+              "type": "string",
+              "value": "You are the lead-response assistant for COACH_NAME, a digital marketing coach who helps potential students WHAT_THE_COACH_TEACHES. You receive raw form submissions from potential students.\n\nFor every submission you must do three things:\n\n1. SUMMARIZE the lead in 2-3 sentences: who they are, what goal they stated, and their main pain point. Use only facts present in the submission - never invent details. If a field is missing or empty, say so explicitly.\n\n2. SCORE the lead as exactly one of: hot, warm, cold.\n- hot: clear goal PLUS an explicit urgency or readiness signal (mentions budget, asks about pricing, wants to start now or this month)\n- warm: genuine interest and a stated goal, but no urgency or readiness signal\n- cold: vague answers, no stated goal, spam-like content, or clearly outside the coach's offer\nGive a one-line score_reason that cites the specific signal from their answers.\n\n3. DRAFT a reply in the coach's voice:\n- Warm and direct. No fluff, no hype words, no emojis, no exclamation marks.\n- Short sentences. Address the lead by first name.\n- Reference their specific goal or pain point within the first two sentences so the reply is obviously personal.\n- 80-140 words total.\n- End with exactly one clear next step: invite them to book a call at BOOKING_LINK.\n- Sign off as COACH_FIRST_NAME.\n- Never promise results, prices, or guarantees. Never reveal that the reply was AI-drafted or that the lead was scored.\n\nOUTPUT FORMAT - respond with ONLY a single valid JSON object. No markdown fences, no commentary, nothing before or after the JSON:\n{\"summary\": \"...\", \"score\": \"hot|warm|cold\", \"score_reason\": \"...\", \"draft_reply\": \"...\"}\nUse \\n inside draft_reply for line breaks."
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-claude",
+      "name": "Claude: Analyze & Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, temperature: 0.4, system: $json.system_prompt, messages: [ { role: 'user', content: 'New form submission from a potential student.\\n\\nName: ' + ($('Normalize Lead').first().json.name || 'not provided') + '\\nEmail: ' + ($('Normalize Lead').first().json.email || 'not provided') + '\\n\\nAll form answers (raw JSON):\\n' + $('Normalize Lead').first().json.raw_answers } ] }) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "id": "ANTHROPIC_CRED_ID",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "id": "node-parse",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst raw = (resp.content && resp.content[0] && resp.content[0].text) ? resp.content[0].text : '';\nif (!raw) {\n  throw new Error('Anthropic response contained no text content: ' + JSON.stringify(resp).slice(0, 300));\n}\nconst cleaned = raw.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim();\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  throw new Error('AI returned invalid JSON: ' + raw.slice(0, 300));\n}\nconst { summary, score, score_reason, draft_reply } = parsed;\nif (!summary || !score || !draft_reply) {\n  throw new Error('AI JSON missing required fields. Got keys: ' + Object.keys(parsed).join(', '));\n}\nconst normScore = String(score).toLowerCase();\nif (!['hot', 'warm', 'cold'].includes(normScore)) {\n  throw new Error('AI returned invalid score: ' + score);\n}\nreturn [{ json: { summary, score: normScore, score_reason: score_reason || '', draft_reply } }];"
+      }
+    },
+    {
+      "id": "node-save-draft",
+      "name": "Sheets: Save Draft",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1200, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "pending_approval",
+            "score": "={{ $json.score }}",
+            "score_reason": "={{ $json.score_reason }}",
+            "summary": "={{ $json.summary }}",
+            "draft_reply": "={{ $json.draft_reply }}"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-ask-coach",
+      "name": "Gmail: Ask Coach (4h)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1400, 300],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "sendAndWait",
+        "sendTo": "COACH_EMAIL@example.com",
+        "subject": "=Approve reply: {{ $('Normalize Lead').first().json.name }} — {{ $('Parse AI Output').first().json.score }} lead",
+        "message": "=New lead needs your reply.\n\nName: {{ $('Normalize Lead').first().json.name }}\nEmail: {{ $('Normalize Lead').first().json.email }}\nScore: {{ $('Parse AI Output').first().json.score }} — {{ $('Parse AI Output').first().json.score_reason }}\n\nSummary:\n{{ $('Parse AI Output').first().json.summary }}\n\n===== DRAFT REPLY =====\n{{ $('Parse AI Output').first().json.draft_reply }}\n=======================\n\nClick the button below and choose:\n- approve: send the draft as-is\n- edit: paste your full edited version into edited_reply\n- reject: no reply will be sent to this lead\n\nIf you do nothing for 4 hours you get one reminder. 8 hours after that, the lead automatically receives a short holding reply.",
+        "responseType": "customForm",
+        "defineForm": "fields",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "approve" },
+                  { "option": "edit" },
+                  { "option": "reject" }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "edited_reply",
+              "fieldType": "textarea"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false,
+          "limitWaitTime": {
+            "values": {
+              "limitType": "afterTimeInterval",
+              "resumeAmount": 4,
+              "resumeUnit": "hours"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "Coach Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-responded-1",
+      "name": "Coach Responded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1600, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "r1",
+              "leftValue": "={{ $json.data?.decision ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-decision",
+      "name": "Decision",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1820, 200],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "renameOutput": true,
+              "outputKey": "approve",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "d1",
+                    "leftValue": "={{ $json.data.decision }}",
+                    "rightValue": "approve",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "renameOutput": true,
+              "outputKey": "edit",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "d2",
+                    "leftValue": "={{ $json.data.decision }}",
+                    "rightValue": "edit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "renameOutput": true,
+              "outputKey": "reject",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "d3",
+                    "leftValue": "={{ $json.data.decision }}",
+                    "rightValue": "reject",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-final-reply",
+      "name": "Set Final Reply",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2040, 140],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f1",
+              "name": "final_reply",
+              "type": "string",
+              "value": "={{ ($json.data?.decision === 'edit' && $json.data?.edited_reply) ? $json.data.edited_reply : $('Parse AI Output').first().json.draft_reply }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-send-reply",
+      "name": "Gmail: Send Reply to Lead",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2260, 140],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Normalize Lead').first().json.email }}",
+        "subject": "Your next step — COACH_NAME",
+        "emailType": "text",
+        "message": "={{ $('Set Final Reply').first().json.final_reply }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "Coach Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-mark-sent",
+      "name": "Sheets: Mark Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2480, 140],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "sent",
+            "final_reply": "={{ $('Set Final Reply').first().json.final_reply }}",
+            "sent_at": "={{ $now.toISO() }}"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-mark-rejected",
+      "name": "Sheets: Mark Rejected",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2040, 360],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "rejected"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-ask-again",
+      "name": "Gmail: Ask Coach Again (8h)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1820, 520],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "sendAndWait",
+        "sendTo": "COACH_EMAIL@example.com",
+        "subject": "=REMINDER — lead waiting: {{ $('Normalize Lead').first().json.name }} ({{ $('Parse AI Output').first().json.score }})",
+        "message": "=You have a lead waiting for approval since {{ $('Normalize Lead').first().json.timestamp }}.\n\nName: {{ $('Normalize Lead').first().json.name }}\nEmail: {{ $('Normalize Lead').first().json.email }}\nScore: {{ $('Parse AI Output').first().json.score }} — {{ $('Parse AI Output').first().json.score_reason }}\n\nSummary:\n{{ $('Parse AI Output').first().json.summary }}\n\n===== DRAFT REPLY =====\n{{ $('Parse AI Output').first().json.draft_reply }}\n=======================\n\nIf you don't respond within 8 hours, the lead will automatically receive a short holding reply so they are not left hanging.",
+        "responseType": "customForm",
+        "defineForm": "fields",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "approve" },
+                  { "option": "edit" },
+                  { "option": "reject" }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "edited_reply",
+              "fieldType": "textarea"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false,
+          "limitWaitTime": {
+            "values": {
+              "limitType": "afterTimeInterval",
+              "resumeAmount": 8,
+              "resumeUnit": "hours"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "Coach Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-responded-2",
+      "name": "Coach Responded (2nd)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2040, 520],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "r2",
+              "leftValue": "={{ $json.data?.decision ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-holding",
+      "name": "Gmail: Send Holding Reply",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2260, 600],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Normalize Lead').first().json.email }}",
+        "subject": "We got your message — COACH_NAME",
+        "emailType": "text",
+        "message": "=Hi {{ $('Normalize Lead').first().json.name }},\n\nThanks for reaching out — your message came through and it's in front of COACH_FIRST_NAME right now. You'll get a personal reply within 24 hours.\n\nTalk soon,\nCOACH_FIRST_NAME's team",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "Coach Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-mark-held",
+      "name": "Sheets: Mark Held",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2480, 600],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "held_autoreply",
+            "final_reply": "AUTO HOLDING REPLY (coach did not respond in time)",
+            "sent_at": "={{ $now.toISO() }}"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-escalate",
+      "name": "Gmail: Escalate to Me",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2700, 600],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "YOUR_ALERT_EMAIL@example.com",
+        "subject": "=ESCALATION: lead auto-held — {{ $('Normalize Lead').first().json.name }}",
+        "emailType": "text",
+        "message": "=The coach did not respond to the approval request within 12 hours total.\n\nA holding reply was automatically sent to the lead so they are not left hanging, but the coach still needs to follow up personally.\n\nLead: {{ $('Normalize Lead').first().json.name }} ({{ $('Normalize Lead').first().json.email }})\nLead ID: {{ $('Normalize Lead').first().json.lead_id }}\nScore: {{ $('Parse AI Output').first().json.score }}\nSubmitted: {{ $('Normalize Lead').first().json.timestamp }}\n\nSheet status is now: held_autoreply",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "Coach Gmail"
+        }
+      }
+    },
+    {
+      "id": "node-mark-error",
+      "name": "Sheets: Mark Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1400, 800],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": ["lead_id"],
+          "schema": [],
+          "value": {
+            "lead_id": "={{ $('Normalize Lead').first().json.lead_id }}",
+            "status": "error",
+            "last_error": "={{ ($json.error?.message ?? JSON.stringify($json)).slice(0, 300) }}"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "node-alert-me",
+      "name": "Gmail: Alert Me (Failure)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1400, 960],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "YOUR_ALERT_EMAIL@example.com",
+        "subject": "=PIPELINE FAILURE — lead {{ $('Normalize Lead').first().json.lead_id }} ({{ $('Normalize Lead').first().json.name }})",
+        "emailType": "text",
+        "message": "=A node failed in the lead-capture workflow. The lead is logged in the sheet but has NOT received a reply.\n\nLead: {{ $('Normalize Lead').first().json.name }} ({{ $('Normalize Lead').first().json.email }})\nLead ID: {{ $('Normalize Lead').first().json.lead_id }}\nSubmitted: {{ $('Normalize Lead').first().json.timestamp }}\n\nError:\n{{ ($json.error?.message ?? JSON.stringify($json)).slice(0, 500) }}\n\nOpen the n8n execution log to retry or handle manually.",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CRED_ID",
+          "name": "Coach Gmail"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Lead Form Webhook": {
+      "main": [
+        [
+          { "node": "Normalize Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Normalize Lead": {
+      "main": [
+        [
+          { "node": "Sheets: Log New Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheets: Log New Lead": {
+      "main": [
+        [
+          { "node": "AI System Prompt", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "AI System Prompt": {
+      "main": [
+        [
+          { "node": "Claude: Analyze & Draft", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude: Analyze & Draft": {
+      "main": [
+        [
+          { "node": "Parse AI Output", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          { "node": "Sheets: Save Draft", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheets: Save Draft": {
+      "main": [
+        [
+          { "node": "Gmail: Ask Coach (4h)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gmail: Ask Coach (4h)": {
+      "main": [
+        [
+          { "node": "Coach Responded?", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Coach Responded?": {
+      "main": [
+        [
+          { "node": "Decision", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Gmail: Ask Coach Again (8h)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Decision": {
+      "main": [
+        [
+          { "node": "Set Final Reply", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Set Final Reply", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Rejected", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Set Final Reply": {
+      "main": [
+        [
+          { "node": "Gmail: Send Reply to Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gmail: Send Reply to Lead": {
+      "main": [
+        [
+          { "node": "Sheets: Mark Sent", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gmail: Ask Coach Again (8h)": {
+      "main": [
+        [
+          { "node": "Coach Responded (2nd)?", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Coach Responded (2nd)?": {
+      "main": [
+        [
+          { "node": "Decision", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Gmail: Send Holding Reply", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Gmail: Send Holding Reply": {
+      "main": [
+        [
+          { "node": "Sheets: Mark Held", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Sheets: Mark Error", "type": "main", "index": 0 },
+          { "node": "Gmail: Alert Me (Failure)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Sheets: Mark Held": {
+      "main": [
+        [
+          { "node": "Gmail: Escalate to Me", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}

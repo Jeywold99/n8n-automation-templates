@@ -1,0 +1,299 @@
+{
+  "name": "5-Minute Reply",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 5-Minute Reply\n\nThe instant a lead arrives (website form POST or Calendly booking), this workflow:\n1. Logs the lead to a Google Sheet \"Leads\" tab\n2. Sends a warm, human-sounding reply from Gmail within seconds\n3. Posts a Slack alert to #leads so a human jumps in\n\nOrder matters: log, then reply, then alert. Every external call has Continue On Fail, so a CRM hiccup never blocks the reply.\n\nBefore first run: configure credentials + env vars (see README) and set this workflow as its own Error Workflow.",
+        "height": 300,
+        "width": 400,
+        "color": 4
+      },
+      "id": "note-overview",
+      "name": "Note - Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, -60]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-lead",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Webhook New Lead",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 340],
+      "webhookId": "5min-reply-new-lead"
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 1: Lead sources\n\nOne webhook, one URL, both sources POST to it:\n- Website form: name, email, message, source\n- Calendly: name, email, event_time\n\nResponds 200 immediately (Respond: Immediately) so the form never waits.\n\nSwap: point ANY form/booking tool at this URL (Typeform, Tally, Jotform, Cal.com, Acuity). If its payload uses different field names, adjust only the next node (Normalize Lead).",
+        "height": 300,
+        "width": 320,
+        "color": 5
+      },
+      "id": "note-swap-trigger",
+      "name": "Note - Swap Lead Sources",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, 560]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize both payload shapes into one clean lead object.\n// Website form: { name, email, message, source }\n// Calendly (simplified): { name, email, event_time }\n// Real Calendly webhooks nest data under `payload`, handled below too.\n\nconst body = $input.first().json.body || $input.first().json;\nconst p = body.payload || {};\n\nconst isCalendly = Boolean(body.event_time) || Boolean(p.scheduled_event) || body.event === 'invitee.created';\n\nconst name = body.name || p.name || 'there';\nconst email = body.email || p.email || '';\nconst eventTime = body.event_time || (p.scheduled_event ? p.scheduled_event.start_time : '') || '';\nconst message = body.message || '';\nconst source = body.source || (isCalendly ? 'calendly' : 'website_form');\nconst firstName = String(name).trim().split(/\\s+/)[0] || 'there';\nconst fromName = $env.FROM_NAME || 'Me';\n\n// --- Email copy lives here so it is easy to edit in ONE place. No em dashes. ---\nlet emailSubject;\nlet emailBody;\n\nif (isCalendly) {\n  emailSubject = `You're booked, ${firstName}!`;\n  emailBody = `Hi ${firstName},\\n\\nJust saw your booking come through for ${eventTime}. That works great on my end, so we are all set.\\n\\nNo prep needed. If anything changes before then, just reply here and we can find another time.\\n\\nLooking forward to it,\\n${fromName}`;\n} else {\n  emailSubject = `Got your message, ${firstName}`;\n  emailBody = `Hi ${firstName},\\n\\nThanks for reaching out, I just read your note. Wanted to reply right away so you know it reached a real person.\\n\\nI will get back to you properly today. If it is urgent, reply to this email and I will bump you to the front of the line.\\n\\nTalk soon,\\n${fromName}`;\n}\n\nreturn [{\n  json: {\n    name,\n    first_name: firstName,\n    email,\n    source,\n    message,\n    event_time: eventTime,\n    received_at: $now.toISO(),\n    email_subject: emailSubject,\n    email_body: emailBody\n  }\n}];"
+      },
+      "id": "node-normalize",
+      "name": "Normalize Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 340]
+    },
+    {
+      "parameters": {
+        "content": "### Normalize Lead\n\nDetects the source (event_time present = Calendly, otherwise form), extracts the first name, stamps received_at, and writes the email subject + body.\n\nWant different email copy? Edit the two templates inside this node. Nothing else needs to change.",
+        "height": 220,
+        "width": 300,
+        "color": 3
+      },
+      "id": "note-normalize",
+      "name": "Note - Normalize",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, 60]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.LEADS_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "value": {
+            "name": "={{ $json.name }}",
+            "email": "={{ $json.email }}",
+            "source": "={{ $json.source }}",
+            "received_at": "={{ $json.received_at }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-log",
+      "name": "Log Lead to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [680, 340],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 2: CRM\n\nDemo = Google Sheets \"Leads\" tab.\n\nSwap this node for HubSpot (Create Contact) or Pipedrive (Create Person / Lead). Map the same 4 fields: name, email, source, received_at.\n\nContinue On Fail is ON: if the CRM is down, the lead STILL gets their reply and Slack still fires.",
+        "height": 240,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-crm",
+      "name": "Note - Swap CRM",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [660, 560]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Normalize Lead').item.json.email }}",
+        "subject": "={{ $('Normalize Lead').item.json.email_subject }}",
+        "emailType": "text",
+        "message": "={{ $('Normalize Lead').item.json.email_body }}",
+        "options": {}
+      },
+      "id": "node-gmail",
+      "name": "Send Instant Reply",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [920, 340],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 3: Email provider\n\nDemo = Gmail.\n\nSwap for Outlook / SMTP / SendGrid. Keep the three expressions pointing at Normalize Lead: email, email_subject, email_body. The copy itself lives in the Normalize Lead node.",
+        "height": 200,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-email",
+      "name": "Note - Swap Email",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [900, 60]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_LEADS_CHANNEL }}",
+          "mode": "name"
+        },
+        "text": "=🔥 New lead! Jump in.\n\n*Name:* {{ $('Normalize Lead').item.json.name }}\n*Email:* {{ $('Normalize Lead').item.json.email }}\n*Source:* {{ $('Normalize Lead').item.json.source }}\n*Received:* {{ $('Normalize Lead').item.json.received_at }}{{ $('Normalize Lead').item.json.event_time ? '\\n*Booked for:* ' + $('Normalize Lead').item.json.event_time : '' }}{{ $('Normalize Lead').item.json.message ? '\\n*Message:* ' + $('Normalize Lead').item.json.message : '' }}",
+        "otherOptions": {}
+      },
+      "id": "node-slack",
+      "name": "Slack Alert #leads",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1160, 340],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Slack Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### SWAP POINT 4: Team alert\n\nDemo = Slack (#leads channel, set via SLACK_LEADS_CHANNEL env var).\n\nSwap for Telegram: replace with a Telegram node, chatId = your chat, same text. Or Discord, MS Teams, SMS. Anything that pings a human fast.",
+        "height": 200,
+        "width": 300,
+        "color": 5
+      },
+      "id": "note-swap-alert",
+      "name": "Note - Swap Alert",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1140, 560]
+    },
+    {
+      "parameters": {},
+      "id": "node-errortrigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [440, 920]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_LEADS_CHANNEL }}",
+          "mode": "name"
+        },
+        "text": "=⚠️ 5-Minute Reply run FAILED. A lead may not have gotten a reply, check n8n now.\n\n*Workflow:* {{ $json.workflow.name }}\n*Node:* {{ $json.execution.lastNodeExecuted }}\n*Error:* {{ $json.execution.error.message }}\n*Time:* {{ $now.format('yyyy-MM-dd HH:mm') }}",
+        "otherOptions": {}
+      },
+      "id": "node-erroralert",
+      "name": "Slack Failure Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [680, 920],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_YOUR_CRED_ID",
+          "name": "Slack Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "### Failure alert\n\nIf the whole run errors out, this fires a Slack alert to the same #leads channel (a missed lead is exactly what that channel watches for).\n\nIMPORTANT: only works if you set this workflow as its own Error Workflow (Settings > Error Workflow > 5-Minute Reply).\n\nPrefer Telegram? Swap this node the same way as SWAP POINT 4.",
+        "height": 240,
+        "width": 320,
+        "color": 2
+      },
+      "id": "note-error",
+      "name": "Note - Failure Alert",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, 1160]
+    }
+  ],
+  "connections": {
+    "Webhook New Lead": {
+      "main": [
+        [
+          {
+            "node": "Normalize Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Lead": {
+      "main": [
+        [
+          {
+            "node": "Log Lead to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Lead to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Send Instant Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Instant Reply": {
+      "main": [
+        [
+          {
+            "node": "Slack Alert #leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Slack Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {},
+  "tags": []
+}
